@@ -1063,6 +1063,147 @@ class SetXrayEncryption(BaseAction):
         client.put_encryption_config(**req)
 
 
+@filters.register('glue-encrypt-key')
+class GlueEncrypted(Filter):
+    """Determine if glue is encrypted.
+
+    :example:
+
+    .. code-block:: yaml
+
+            policies:
+              - name: xray-encrypt-with-default
+                resource: aws.account
+                filters:
+                  - type: xray-encrypt-key
+                    key: default
+              - name: xray-encrypt-with-kms
+                  - type: xray-encrypt-key
+                    key: kms
+              - name: xray-encrypt-with-specific-key
+                  -type: xray-encrypt-key
+                   key: alias/my-alias or arn or keyid
+    """
+    #kms.describe_key returns NotFoundException if key is not present
+    permissions = ('glue:GetDataCatalogEncryptionSettings',) #Returns ARNs rather than just IDs
+    schema = {
+        'type': 'object',
+        'additionalProperties': False,
+        'properties': {
+            'type': {'enum': ['glue-encrypt-key']},
+            'CatalogId': {'type': 'string'},
+            'DataCatalogEncryptionSettings': {
+                'type': 'object',
+                'additionalProperties': False,
+                'properties': {
+                    'EncryptionAtRest': {
+                        'type': 'object',
+                        'additionalProperties': False,
+                        'properties': {
+                            'CatalogEncryptionMode': {'type': 'string', 
+                                'enum': ['DISABLED', 'SSE-KMS']},
+                            'SseAwsKmsKeyId': {'type': 'string'}
+                        }
+                    },
+                    'ConnectionPasswordEncryption': {
+                        'type': 'object',
+                        'additionalProperties': False,
+                        'properties': {
+                            'ReturnConnectionPasswordEncrypted': {'type': 
+                                'boolean'},
+                            'AwsKmsKeyId': {'type': 'string'}
+                        }
+                    }                 
+                }
+            }
+        }
+    }
+
+    def process(self, resources, event=None):
+        client = self.manager.session_factory().client('glue')
+        gec_result = client.get_data_catalog_encryption_settings()['EncryptionConfig']
+        resources[0]['c7n:XrayEncryptionConfig'] = gec_result
+
+        k = self.data.get('key')
+        if k not in ['default', 'kms']:
+            kmsclient = self.manager.session_factory().client('kms')
+            keyid = kmsclient.describe_key(KeyId=k)['KeyMetadata']['Arn']
+            rc = resources if (gec_result['KeyId'] == keyid) else []
+        else:
+            kv = 'KMS' if self.data.get('key') == 'kms' else 'NONE'
+            rc = resources if (gec_result['Type'] == kv) else []
+        return rc
+
+
+@actions.register('set-glue-encryption')
+class SetGlueEncryption(BaseAction):
+    """Set Glue encryption settings (dataCatalog and connection pws)
+
+    :example:
+
+    .. code-block:: yaml
+
+            policies:
+              - name: set-datacatalog-encryption
+                resource: aws.account
+                actions:
+                  - type: set-glue-encryption
+                    DataCatalogEncryptionSettings
+                      EncryptionAtRest:
+                        CatalogEncryptionMode: SSE-KMS
+                        SseAwsKmsKeyId: arn:aws:kms:us-east-1:<acc_num>:key/<key_id>
+    """
+    permissions = ('glue:PutDataCatalogEncryptionSettings',)
+
+    schema = {
+        'type': 'object',
+        'additionalProperties': False,
+        'properties': {
+            'type': {'enum': ['set-glue-encryption']},
+            'CatalogId': {'type': 'string'},
+            'DataCatalogEncryptionSettings': {
+                'type': 'object',
+                'additionalProperties': False,
+                'properties': {
+                    'EncryptionAtRest': {
+                        'type': 'object',
+                        'additionalProperties': False,
+                        'properties': {
+                            'CatalogEncryptionMode': {'type': 'string', 
+                                'enum': ['DISABLED', 'SSE-KMS']},
+                            'SseAwsKmsKeyId': {'type': 'string'}
+                        }
+                    },
+                    'ConnectionPasswordEncryption': {
+                        'type': 'object',
+                        'additionalProperties': False,
+                        'properties': {
+                            'ReturnConnectionPasswordEncrypted': {'type': 
+                                'boolean'},
+                            'AwsKmsKeyId': {'type': 'string'}
+                        }
+                    }                 
+                }
+            }
+        }
+    }
+
+    def process(self, resources):
+        c = local_session(self.manager.session_factory).client('glue')
+        params = dict(self.data)
+        params.pop('type')
+        dc_key = params.get('DataCatalogEncryptionSettings').get('EncryptionAtRest', {}).get('SseAwsKmsKeyId')
+        pw_key = params.get('DataCatalogEncryptionSettings').get('ConnectionPasswordEncryption', {}).get('AwsKmsKeyId')
+        kmsclient = self.manager.session_factory().client('kms')
+        if dc_key is not None and dc_key.startswith('alias'):
+            dc_keyid = kmsclient.describe_key(KeyId=dc_key)['KeyMetadata']['Arn']
+            params['DataCatalogEncryptionSettings']['EncryptionAtRest']['SseAwsKmsKeyId'] = dc_keyid
+        if pw_key is not None and pw_key.startswith('alias'):
+            pw_keyid = kmsclient.describe_key(KeyId=pw_key)['KeyMetadata']['Arn']
+            params['DataCatalogEncryptionSettings']['ConnectionPasswordEncryption']['AwsKmsKeyId'] = pw_keyid
+        c.put_data_catalog_encryption_settings(**params)
+
+
 @filters.register('s3-public-block')
 class S3PublicBlock(ValueFilter):
     """Check for s3 public blocks on an account.
