@@ -81,6 +81,10 @@ FindingTypes = {
 }
 
 
+# Mostly undocumented value size limit
+SECHUB_VALUE_SIZE_LIMIT = 1024
+
+
 def build_vocabulary():
     vocab = []
     for ns, quals in FindingTypes.items():
@@ -349,7 +353,7 @@ class OtherResourcePostFinding(PostFinding):
                 v = str(v)
             else:
                 continue
-            details[k] = v
+            details[k] = v[:SECHUB_VALUE_SIZE_LIMIT]
 
         details['c7n:resource-type'] = self.manager.type
         other = {
@@ -366,6 +370,8 @@ class OtherResourcePostFinding(PostFinding):
     @classmethod
     def register_resource(klass, registry, event):
         for rtype, resource_manager in registry.items():
+            if not resource_manager.has_arn():
+                continue
             if 'post-finding' in resource_manager.action_registry:
                 continue
             resource_manager.action_registry.register('post-finding', klass)

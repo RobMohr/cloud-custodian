@@ -128,6 +128,9 @@ class PythonPackageArchive(object):
         """
         for root, dirs, files in os.walk(path):
             arc_prefix = os.path.relpath(root, os.path.dirname(path))
+            # py3 remove pyc cache dirs.
+            if '__pycache__' in dirs:
+                dirs.remove('__pycache__')
             for f in files:
                 dest_path = os.path.join(arc_prefix, f)
 
@@ -863,7 +866,8 @@ class PolicyLambda(AbstractLambdaFunction):
     def get_archive(self):
         self.archive.add_contents(
             'config.json', json.dumps(
-                {'policies': [self.policy.data]}, indent=2))
+                {'execution-options': dict(self.policy.options),
+                 'policies': [self.policy.data]}, indent=2))
         self.archive.add_contents('custodian_policy.py', PolicyHandlerTemplate)
         self.archive.close()
         return self.archive

@@ -165,6 +165,50 @@ class PolicyPermissions(BaseTest):
         if names:
             self.fail("%s dont have resource name for reporting" % (", ".join(names)))
 
+    def test_resource_arn_info(self):
+        missing = []
+        whitelist_missing = set((
+            'rest-stage', 'rest-resource', 'rest-vpclink'))
+        explicit = []
+        whitelist_explicit = set((
+            'rest-account', 'shield-protection', 'shield-attack',
+            'dlm-policy', 'efs', 'efs-mount-target', 'gamelift-build',
+            'glue-connection', 'glue-dev-endpoint', 'cloudhsm-cluster',
+            'snowball-cluster', 'snowball', 'ssm-activation',
+            'support-case', 'transit-attachment'))
+
+        missing_method = []
+        for k, v in manager.resources.items():
+            rtype = getattr(v, 'resource_type', None)
+            if not v.has_arn():
+                missing_method.append(k)
+            if rtype is None:
+                continue
+            if v.__dict__.get('get_arns'):
+                continue
+            if getattr(rtype, 'arn', None) is False:
+                explicit.append(k)
+            if getattr(rtype, 'arn', None) is not None:
+                continue
+            if getattr(rtype, 'type', None) is not None:
+                continue
+            missing.append(k)
+
+        self.assertEqual(
+            set(missing).union(explicit),
+            set(missing_method))
+
+        missing = set(missing).difference(whitelist_missing)
+        if missing:
+            self.fail(
+                "%d resources %s are missing arn type info" % (
+                    len(missing), ", ".join(missing)))
+        explicit = set(explicit).difference(whitelist_explicit)
+        if explicit:
+            self.fail(
+                "%d resources %s dont have arn type info exempted" % (
+                    len(explicit), ", ".join(explicit)))
+
     def test_resource_permissions(self):
         self.capture_logging("c7n.cache")
         missing = []
@@ -310,6 +354,17 @@ class TestPolicyCollection(BaseTest):
 
 
 class TestPolicy(BaseTest):
+
+    def test_policy_variable_precedent(self):
+        p = self.load_policy({
+            'name': 'compute',
+            'resource': 'aws.ec2'},
+            config={'account_id': '00100100'})
+
+        v = p.get_variables({'account_id': 'foobar',
+                             'charge_code': 'oink'})
+        self.assertEqual(v['account_id'], '00100100')
+        self.assertEqual(v['charge_code'], 'oink')
 
     def test_policy_variable_interpolation(self):
 
